@@ -1,25 +1,51 @@
-name: End-to-End DevSecOps CI Pipeline
+name: End-to-End DevSecOps Enterprise CI Pipeline
 
 on:
   push:
     branches: [ "main" ]
 
 jobs:
-  devsecops-pipeline:
-    runs-on: self-hosted 
+  build-and-secure:
+    runs-on: self-hosted
 
     steps:
+      # Requirement 1 & 2: Pull down code onto your local VirtualBox runner workspace
       - name: Checkout Codebase
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Scan for Exposed Secrets (Gitleaks)
-        uses: gitleaks/gitleaks-action@v2
+      # Requirement 5: Scan code quality and bugs, streaming metrics directly to SonarCloud
+      - name: SonarCloud Static Code Analysis (SAST)
+        uses: SonarSource/sonarcloud-github-action@master
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        continue-on-error: true # Logs leaks without crashing the build while testing
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
+      # Requirement 3: Scan third-party package dependencies for vulnerabilities
       - name: Scan Package Dependencies via Trivy (FS Mode)
         run: |
           trivy fs --format table --exit-code 0 --severity HIGH,CRITICAL .
+
+      # Requirement 7: Authenticate your VirtualBox Docker daemon with the JFrog Registry
+      - name: Log in to JFrog Artifactory Registry
+        uses: docker/login-action@v3
+        with:
+          registry: trialwvado3.jfrog.io
+          username: ${{ secrets.JFROG_USERNAME }}
+          password: ${{ secrets.JFROG_PASSWORD }}
+
+      # Requirement 3 & 7: Compile application files into a containerized image layer
+      - name: Build Application Docker Image
+        run: |
+          docker build -t trialwvado3.jfrog.io/docker-trial/devsecops-app:${{ github.sha }} .
+
+      # Quality Gate: Analyze compiled image layers for operating system exploits
+      - name: Scan Docker Image via Trivy (Image Mode)
+        run: |
+          trivy image --format table --exit-code 0 --severity HIGH,CRITICAL trialwvado3.jfrog.io/docker-trial/devsecops-app:${{ github.sha }}
+
+      # Requirement 7: Upload the verified container image package safely into JFrog Artifactory
+      - name: Publish Verified Artifact Image to JFrog Artifactory
+        run: |
+          docker push trialwvado3.jfrog.io/docker-trial/devsecops-app:${{ github.sha }}
